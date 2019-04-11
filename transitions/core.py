@@ -13,13 +13,14 @@ except ImportError:
     # python2
     pass
 
+import asyncio
 import inspect
 import itertools
 import logging
 import warnings
-
 from collections import OrderedDict, defaultdict, deque
 from functools import partial
+
 from six import string_types
 
 # make deprecation warnings of transition visible for module users
@@ -27,6 +28,18 @@ warnings.filterwarnings(action='default', message=r"Starting from transitions ve
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.addHandler(logging.NullHandler())
+
+
+def opt_async(callback, func, data):
+    '''If callback is a coroutine, call it on the event loop rather than directly.
+    This is a prototype change. It doesn't account for the desire to run a machine on a specific event loop.
+    It also hasn't broadly been tested. Mostly just proving a concept.
+    '''
+    if inspect.iscoroutinefunction(callback):
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete((callback(func, data)))
+    else:
+        return callback(func, data)
 
 
 def listify(obj):
@@ -118,14 +131,14 @@ class State(object):
         """ Triggered when a state is entered. """
         _LOGGER.debug("%sEntering state %s. Processing callbacks...", event_data.machine.name, self.name)
         for handle in self.on_enter:
-            event_data.machine.callback(handle, event_data)
+            opt_async(event_data.machine.callback, handle, event_data)
         _LOGGER.info("%sEntered state %s", event_data.machine.name, self.name)
 
     def exit(self, event_data):
         """ Triggered when a state is exited. """
         _LOGGER.debug("%sExiting state %s. Processing callbacks...", event_data.machine.name, self.name)
         for handle in self.on_exit:
-            event_data.machine.callback(handle, event_data)
+            opt_async(event_data.machine.callback, handle, event_data)
         _LOGGER.info("%sExited state %s", event_data.machine.name, self.name)
 
     def add_callback(self, trigger, func):
@@ -247,17 +260,17 @@ class Transition(object):
 
     def _prepare_state_change(self, event_data):
         for func in self.prepare:
-            event_data.machine.callback(func, event_data)
+            opt_async(event_data.machine.callback, func, event_data)
             _LOGGER.debug("Executed callback '%s' before conditions.", func)
 
     def _before_state_change(self, event_data):
         for func in itertools.chain(event_data.machine.before_state_change, self.before):
-            event_data.machine.callback(func, event_data)
+            opt_async(event_data.machine.callback, func, event_data)
             _LOGGER.debug("%sExecuted callback '%s' before transition.", event_data.machine.name, func)
 
     def _after_state_change(self, event_data):
         for func in itertools.chain(self.after, event_data.machine.after_state_change):
-            event_data.machine.callback(func, event_data)
+            opt_async(event_data.machine.callback, func, event_data)
             _LOGGER.debug("%sExecuted callback '%s' after transition.", event_data.machine.name, func)
 
     def execute(self, event_data):
@@ -414,7 +427,7 @@ class Event(object):
 
     def _process(self, event_data):
         for func in self.machine.prepare_event:
-            self.machine.callback(func, event_data)
+            opt_async(self.machine.callback, func, event_data)
             _LOGGER.debug("Executed machine preparation callback '%s' before conditions.", func)
 
         try:
@@ -428,7 +441,7 @@ class Event(object):
             raise
         finally:
             for func in self.machine.finalize_event:
-                self.machine.callback(func, event_data)
+                opt_async(self.machine.callback, func, event_data)
                 _LOGGER.debug("Executed machine finalize callback '%s'.", func)
         return event_data.result
 
